@@ -13,9 +13,9 @@ def create_sample_data():
 
 def test_initialization():
     data = create_sample_data()
-    spc = SPC(data_in=data, target_col='Value')
+    spc = SPC(df=data, target_col='Value')
 
-    assert spc.data_in.equals(data)
+    assert spc.df.equals(data)
     assert spc.target_col == 'Value'
     assert spc.chart_type == 'Individual-chart'
     assert spc.change_dates is None
@@ -26,7 +26,7 @@ def test_initialization():
 def test_clean_time_series_data():
     data = create_sample_data()
     data.iloc[5, 0] = np.nan  # Introduce a missing value
-    spc = SPC(data_in=data, target_col='Value')
+    spc = SPC(df=data, target_col='Value')
 
     spc._clean_time_series_data(data)
 
@@ -35,7 +35,7 @@ def test_clean_time_series_data():
 
 def test_setup_single_run():
     data = create_sample_data()
-    spc = SPC(data_in=data, target_col='Value')
+    spc = SPC(df=data, target_col='Value')
 
     formatted_x_out, formatted_y_out = spc._setup_single_run(data)
 
