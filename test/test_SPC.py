@@ -28,7 +28,7 @@ def test_clean_time_series_data():
     data.iloc[5, 0] = np.nan  # Introduce a missing value
     spc = SPC(data_in=data, target_col='Value')
 
-    spc._clean_time_series_data(data)
+    spc._clean_time_series_data()
 
     missing_values = data.isnull().sum()
     assert missing_values.any()
@@ -54,7 +54,9 @@ def test_rules_func():
     data['+1sd'] = data['Value'].mean() + data['Value'].std()
     data['-1sd'] = data['Value'].mean() - data['Value'].std()
 
-    violations = SPC._rules_func(data, 'Value')
+    spc = SPC(data_in=data, target_col='Value')
+
+    violations = spc._rules_func(data, 'Value')
 
     assert isinstance(violations, dict)
     assert 'Rule 1 violation' in violations
