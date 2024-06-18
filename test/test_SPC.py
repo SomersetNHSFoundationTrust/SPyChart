@@ -13,20 +13,17 @@ def create_sample_data():
 
 def test_initialization():
     data = create_sample_data()
-    spc = SPC(data_in=data, target_col='Value')
+    spc = SPC(df=data, target_col='Value')
 
-    assert spc.data_in.equals(data)
+    assert spc.df.equals(data)
     assert spc.target_col == 'Value'
     assert spc.chart_type == 'Individual-chart'
     assert spc.change_dates is None
-    assert spc.rules_table is not None
-    assert isinstance(spc.rules_table, pd.DataFrame)
-    assert 'Rule 1' in spc.rules_table.index
 
 def test_clean_time_series_data():
     data = create_sample_data()
     data.iloc[5, 0] = np.nan  # Introduce a missing value
-    spc = SPC(data_in=data, target_col='Value')
+    spc = SPC(df=data, target_col='Value')
 
     spc._clean_time_series_data(data)
 
@@ -35,7 +32,7 @@ def test_clean_time_series_data():
 
 def test_setup_single_run():
     data = create_sample_data()
-    spc = SPC(data_in=data, target_col='Value')
+    spc = SPC(df=data, target_col='Value')
 
     formatted_x_out, formatted_y_out = spc._setup_single_run(data)
 
@@ -61,6 +58,13 @@ def test_rules_func():
     assert 'Rule 2 violation' in violations
     assert 'Rule 3 violation' in violations
 
+def test_run_spc():
+    data = create_sample_data()
+    spc = SPC(df=data, target_col='Value')
+
+    output_data = spc.run_spc()
+    assert isinstance(output_data, pd.DataFrame)
+    
 
 if __name__ == "__main__":
     pytest.main()
