@@ -18,13 +18,9 @@
 
 import pandas as pd
 import numpy as np
-from plotly import graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
 import json
 import os
 from numpy.lib.stride_tricks import sliding_window_view
-
 '''
 
 ------------------
@@ -42,7 +38,7 @@ from numpy.lib.stride_tricks import sliding_window_view
 
 class SPC:
 
-    def __init__(self, data_in, target_col, chart_type='Individual-chart', change_dates=None, baseline_date=None):
+    def __init__(self, df, target_col, chart_type='Individual-chart', change_dates=None, baseline_period=None):
 
         """
 
@@ -62,7 +58,7 @@ class SPC:
 
         Args:
 
-            data_in (pandas.DataFrame): Data to analyse.
+            df (pandas.DataFrame): Data to analyse.
 
             target_col (str): Name of target column.
 
@@ -80,16 +76,26 @@ class SPC:
              change_dates (list of str) (OPTIONAL): List of dates, which each represent a change in the underlying
              process being analysed. Control lines will be re-calculated after each date in the list.
 
-             baseline_date (str) (OPTIONAL): Data before this date will be used to calculate the control lines.
+             baseline_period (str) (OPTIONAL): Data before this date will be used to calculate the control lines.
+
+         Returns:
+            spc_data (
+
+         SPC Rules:
+         Rule 1: 1 point outside the +/- 3 sigma limits.
+         Rule 2: 8 successive consecutive points above (or below) the centre line.
+         Rule 3: 6 or more consecutive points steadily increasing or decreasing.
+         Rule 4: 2 out of 3 successive points beyond +/- 2 sigma limits.
+         Rule 5: 15 consecutive points within +/- 1 sigma on either side of the centre line.
 
 
         """
 
-        self.data_in = data_in.copy()
+        self.df = df.copy()
         self.target_col = target_col
         self.chart_type = chart_type
         self.change_dates = change_dates
-        self.baseline_date = baseline_date
+        self.baseline_period = pd.to_datetime(baseline_period)
         self.rules_table = None
         self.spc_data = None
 
@@ -106,7 +112,8 @@ class SPC:
         self._chart_name_x = None
         self._chart_name_y = None
         # Assuming index is date
-        self._date_col = data_in.index.name
+
+        self._date_col = df.index.name
 
         base_dir = os.path.dirname(__file__)
         self.rules = json.load(open(os.path.join(base_dir, "rules.json")))
@@ -130,33 +137,40 @@ class SPC:
         # -** Checking data/alerting user of potential issues.**-
         # ------------------------------------------------------
 
-        if (data_in.index.value_counts() > 1).any():
+        if (df.index.value_counts() > 1).any():
             print('Duplicate dates detected.')
 
-            if data_in.index.value_counts().min() == data_in.index.value_counts().max():
-                print(f'Constant sample size = {data_in.index.value_counts()[0]}')
-                self.sample_size = data_in.index.value_counts()[0]
+            if df.index.value_counts().min() == df.index.value_counts().max():
+                print(f'Constant sample size = {df.index.value_counts()[0]}')
+                self.sample_size = df.index.value_counts()[0]
 
-        if len(data_in) <= 20:
+        if len(df) <= 20:
             print('Less than 20 data points detected. Consider collecting more data before using this tool.')
 
-        if self.baseline_date is not None:
-            if len(data_in.copy().loc[:pd.to_datetime(self.baseline_date)]) < 20:
+        if self.baseline_period is not None:
+            if len(df.copy().loc[:self.baseline_period]) < 20:
                 print('Less than 20 data points detected in baseline period. Consider adding more \
                 data pre-baseline.')
 
         self.setup()
         self.check_rules()
 
-        start_date = pd.to_datetime(data_in.index.min()).strftime('%d/%m/%Y')
-        end_date = pd.to_datetime(data_in.index.max()).strftime('%d/%m/%Y')
-        title = f'<b>SPC Chart:</b> Monitoring the variable {target_col} during the period {start_date} to {end_date}'
-        fig = self.plot_spc(title=title)
-        self.spc_chart = fig
 
     # -----------------------
     # -** MAIN CLASS CODE **-
     # -----------------------
+
+    def run_spc(self):
+
+        """
+	    Run all SPC methods in a convenient function.
+
+	    """
+
+        self.setup()
+        self.check_rules()
+
+        return self.spc_data
 
     def setup(self):
         """
@@ -182,14 +196,14 @@ class SPC:
         """
 
         # Check if index is in pandas datetime format
-        if pd.api.types.is_datetime64_any_dtype(self.data_in.index):
+        if pd.api.types.is_datetime64_any_dtype(self.df.index):
             try:
-                self.data_in.index = pd.to_datetime(self.data_in.index)
+                self.df.index = pd.to_datetime(self.df.index)
             except ValueError:
                 raise ValueError(f"Index not in required format. Please use datetime index.")
 
         # Check for missing data
-        missing_values = self.data_in.isnull().sum()
+        missing_values = self.df.isnull().sum()
 
         if missing_values.any():
             print("Missing values detected:")
@@ -199,14 +213,14 @@ class SPC:
         # TODO: Docstring
         # Check input arguments to determine number of runs of the _setup_single_run() method.
         if self.change_dates is None:
-            self._formatted_data_x, self._formatted_data_y = self._setup_single_run(data=self.data_in)
+            self._formatted_data_x, self._formatted_data_y = self._setup_single_run(data=self.df)
 
         else:
-            list_dates = [self.data_in.index[0]] + self.change_dates + [self.data_in.index[-1]]
+            list_dates = [self.df.index[0]] + self.change_dates + [self.df.index[-1]]
             list_dataframes = [
-                                  self.data_in.loc[list_dates[idx]: (pd.to_datetime(list_dates[idx + 1]) - pd.DateOffset(days=1))]
+                                  self.df.loc[list_dates[idx]: (pd.to_datetime(list_dates[idx + 1]) - pd.DateOffset(days=1))]
                                   for idx in range(0, len(list_dates) -2)
-                              ] + [self.data_in.loc[list_dates[-2]:(pd.to_datetime(list_dates[-1]))]]
+                              ] + [self.df.loc[list_dates[-2]:(pd.to_datetime(list_dates[-1]))]]
 
             formatted_x = []
             formatted_y = []
@@ -233,7 +247,7 @@ class SPC:
        upper/lower limits and the center line.
 
         Args:
-            data_in (pandas.DataFrame): Data input (with datetime index).
+            df (pandas.DataFrame): Data input (with datetime index).
             chart_type (str): SPC chart type (selected from one of the above).
 
         Returns:
@@ -282,15 +296,15 @@ class SPC:
 
         # If we're not using baseline data, we set baseline data to last value of input data.
         if self.change_dates is not None:
-            self.baseline_date = data.index[-1]
+            self.baseline_period = data.index[-1]
 
-        if (self.baseline_date is None) & (self.change_dates is None):
-            self.baseline_date = data.index[-1]
+        if (self.baseline_period is None) & (self.change_dates is None):
+            self.baseline_period = data.index[-1]
 
         if (self.chart_type == 'Individual-chart') or (self.chart_type == 'XmR-chart'):
 
-            baseline_data = data.copy().loc[:pd.to_datetime(self.baseline_date), :]
-            baseline_data['mR'] = data[self.target_col].diff().abs().loc[:pd.to_datetime(self.baseline_date)]
+            baseline_data = data.copy().loc[:self.baseline_period, :]
+            baseline_data['mR'] = data[self.target_col].diff().abs().loc[:self.baseline_period]
 
             # Individual chart
             data_I = data.copy()
@@ -354,13 +368,13 @@ class SPC:
                                                              drop=True).rename(columns={'x_bar': self.target_col})
             df_out = x_bar_df[['x_bar', self._date_col]].set_index(self._date_col,
                                                                    drop=True).rename(columns={'x_bar': self.target_col})
-            df_out['cl'] = df_out.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean()
-            df_out['lcl'] = df_out.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() - float(
+            df_out['cl'] = df_out.loc[:self.baseline_period][self.target_col].mean()
+            df_out['lcl'] = df_out.loc[:self.baseline_period][self.target_col].mean() - float(
                 x_bar_vals['A2'][self.sample_size]) * \
-                            df_r.loc[:pd.to_datetime(self.baseline_date)]['r'].mean()
-            df_out['ucl'] = df_out.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() + float(
+                            df_r.loc[:self.baseline_period]['r'].mean()
+            df_out['ucl'] = df_out.loc[:self.baseline_period][self.target_col].mean() + float(
                 x_bar_vals['A2'][self.sample_size]) * \
-                            df_r.loc[:pd.to_datetime(self.baseline_date)]['r'].mean()
+                            df_r.loc[:self.baseline_period]['r'].mean()
 
             # Value to get each zone (A, B, C)
             zone = ((df_out['ucl'] - df_out['cl']) / 3)[0]
@@ -376,10 +390,10 @@ class SPC:
             df_out_R = pd.DataFrame()
             df_out_R[self._date_col] = x_bar_df[self._date_col].values
             df_out_R['r'] = x_bar_df['r'].values
-            df_out_R['cl'] = df_r.loc[:pd.to_datetime(self.baseline_date)]['r'].mean()
-            df_out_R['lcl'] = df_r.loc[:pd.to_datetime(self.baseline_date)]['r'].mean() * float(
+            df_out_R['cl'] = df_r.loc[:self.baseline_period]['r'].mean()
+            df_out_R['lcl'] = df_r.loc[:self.baseline_period]['r'].mean() * float(
                 x_bar_vals['D3'][self.sample_size])
-            df_out_R['ucl'] = df_r.loc[:pd.to_datetime(self.baseline_date)]['r'].mean() * float(
+            df_out_R['ucl'] = df_r.loc[:self.baseline_period]['r'].mean() * float(
                 x_bar_vals['D4'][self.sample_size])
 
             zone_R = ((df_out_R['ucl'] - df_out_R['cl']) / 3)[0]
@@ -410,13 +424,13 @@ class SPC:
                 columns={'x_bar': self.target_col})
             df_out = x_bar_df[['x_bar', self._date_col]].set_index(self._date_col,
                                                                    drop=True).rename(columns={'x_bar': self.target_col})
-            df_out['cl'] = df_out.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean()
-            df_out['lcl'] = df_out.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() - float(
+            df_out['cl'] = df_out.loc[:self.baseline_period][self.target_col].mean()
+            df_out['lcl'] = df_out.loc[:self.baseline_period][self.target_col].mean() - float(
                 x_bar_vals['A3'][self.sample_size]) * \
-                            df_r.loc[:pd.to_datetime(self.baseline_date)]['r'].mean()
-            df_out['ucl'] = df_out.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() + float(
+                            df_r.loc[:self.baseline_period]['r'].mean()
+            df_out['ucl'] = df_out.loc[:self.baseline_period][self.target_col].mean() + float(
                 x_bar_vals['A3'][self.sample_size]) * \
-                            df_r.loc[:pd.to_datetime(self.baseline_date)]['r'].mean()
+                            df_r.loc[:self.baseline_period]['r'].mean()
 
             zone = ((df_out['ucl'] - df_out['cl']) / 3)
 
@@ -431,10 +445,10 @@ class SPC:
             df_out_S = pd.DataFrame()
             df_out_S[self._date_col] = x_bar_df[self._date_col].values
             df_out_S['r'] = x_bar_df['r'].values
-            df_out_S['cl'] = df_r.loc[:pd.to_datetime(self.baseline_date)]['r'].mean()
-            df_out_S['lcl'] = df_r.loc[:pd.to_datetime(self.baseline_date)]['r'].mean() * float(
+            df_out_S['cl'] = df_r.loc[:self.baseline_period]['r'].mean()
+            df_out_S['lcl'] = df_r.loc[:self.baseline_period]['r'].mean() * float(
                 x_bar_vals['B3'][self.sample_size])
-            df_out_S['ucl'] = df_r.loc[:pd.to_datetime(self.baseline_date)]['r'].mean() * float(
+            df_out_S['ucl'] = df_r.loc[:self.baseline_period]['r'].mean() * float(
                 x_bar_vals['B4'][self.sample_size])
 
             zone_R = ((df_out_S['ucl'] - df_out_S['cl']) / 3)
@@ -454,140 +468,140 @@ class SPC:
 
         elif self.chart_type == 'c-chart':
 
-            data_in = data.copy()
+            df = data.copy()
 
-            data_in['cl'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean()
-            data_in['lcl'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() - \
-                             (3 * ((data_in[self.target_col].mean()) ** 0.5))
-            data_in['ucl'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() + \
-                             (3 * ((data_in[self.target_col].mean()) ** 0.5))
+            df['cl'] = df.loc[:self.baseline_period][self.target_col].mean()
+            df['lcl'] = df.loc[:self.baseline_period][self.target_col].mean() - \
+                        (3 * ((df[self.target_col].mean()) ** 0.5))
+            df['ucl'] = df.loc[:self.baseline_period][self.target_col].mean() + \
+                        (3 * ((df[self.target_col].mean()) ** 0.5))
 
-            data_in['+1sd'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() + \
-                              (1 * ((data_in[self.target_col].mean()) ** 0.5))
-            data_in['-1sd'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() - \
-                              (1 * ((data_in[self.target_col].mean()) ** 0.5))
-            data_in['+2sd'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() + \
-                              (2 * ((data_in[self.target_col].mean()) ** 0.5))
-            data_in['-2sd'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() - \
-                              (2 * ((data_in[self.target_col].mean()) ** 0.5))
+            df['+1sd'] = df.loc[:self.baseline_period][self.target_col].mean() + \
+                         (1 * ((df[self.target_col].mean()) ** 0.5))
+            df['-1sd'] = df.loc[:self.baseline_period][self.target_col].mean() - \
+                         (1 * ((df[self.target_col].mean()) ** 0.5))
+            df['+2sd'] = df.loc[:self.baseline_period][self.target_col].mean() + \
+                         (2 * ((df[self.target_col].mean()) ** 0.5))
+            df['-2sd'] = df.loc[:self.baseline_period][self.target_col].mean() - \
+                         (2 * ((df[self.target_col].mean()) ** 0.5))
 
             # Check lcl doesn't fall below 0.
-            data_in['lcl'] = [x if x > 0 else 0 for x in data_in['lcl']]
+            df['lcl'] = [x if x > 0 else 0 for x in df['lcl']]
 
-            return data_in, None
+            return df, None
 
         elif self.chart_type == 'p-chart':
 
-            data_in = data.copy()
+            df = data.copy()
 
-            data_in[self.target_col] = data_in[self.target_col] / data_in['n']
+            df[self.target_col] = df[self.target_col] / df['n']
 
-            data_in['cl'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean()
-            data_in['lcl'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() - 3 * (
-                    (data_in[self.target_col].mean() *
-                     (1 - data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean())) /
-                    data_in.loc[:pd.to_datetime(self.baseline_date)]['n']) ** 0.5
+            df['cl'] = df.loc[:self.baseline_period][self.target_col].mean()
+            df['lcl'] = df.loc[:self.baseline_period][self.target_col].mean() - 3 * (
+                    (df[self.target_col].mean() *
+                     (1 - df.loc[:self.baseline_period][self.target_col].mean())) /
+                    df.loc[:self.baseline_period]['n']) ** 0.5
 
-            data_in['ucl'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() + 3 * (
-                    (data_in[self.target_col].mean() * (
-                            1 - data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean())) /
-                    data_in.loc[:pd.to_datetime(self.baseline_date)]['n']) ** 0.5
+            df['ucl'] = df.loc[:self.baseline_period][self.target_col].mean() + 3 * (
+                    (df[self.target_col].mean() * (
+                            1 - df.loc[:self.baseline_period][self.target_col].mean())) /
+                    df.loc[:self.baseline_period]['n']) ** 0.5
 
-            data_in['+1sd'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() + 1 * (
-                    (data_in[self.target_col].mean() *
-                     (1 - data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean())) /
-                    data_in.loc[:pd.to_datetime(self.baseline_date)]['n']) ** 0.5
+            df['+1sd'] = df.loc[:self.baseline_period][self.target_col].mean() + 1 * (
+                    (df[self.target_col].mean() *
+                     (1 - df.loc[:self.baseline_period][self.target_col].mean())) /
+                    df.loc[:self.baseline_period]['n']) ** 0.5
 
-            data_in['-1sd'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() - 1 * (
-                    (data_in[self.target_col].mean() * (
-                            1 - data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean())) /
-                    data_in.loc[:pd.to_datetime(self.baseline_date)]['n']) ** 0.5
+            df['-1sd'] = df.loc[:self.baseline_period][self.target_col].mean() - 1 * (
+                    (df[self.target_col].mean() * (
+                            1 - df.loc[:self.baseline_period][self.target_col].mean())) /
+                    df.loc[:self.baseline_period]['n']) ** 0.5
 
-            data_in['+2sd'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() + 2 * (
-                    (data_in[self.target_col].mean() *
-                     (1 - data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean())) /
-                    data_in.loc[:pd.to_datetime(self.baseline_date)]['n']) ** 0.5
+            df['+2sd'] = df.loc[:self.baseline_period][self.target_col].mean() + 2 * (
+                    (df[self.target_col].mean() *
+                     (1 - df.loc[:self.baseline_period][self.target_col].mean())) /
+                    df.loc[:self.baseline_period]['n']) ** 0.5
 
-            data_in['-2sd'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() - 2 * (
-                    (data_in[self.target_col].mean() * (
-                            1 - data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean())) /
-                    data_in.loc[:pd.to_datetime(self.baseline_date)]['n']) ** 0.5
+            df['-2sd'] = df.loc[:self.baseline_period][self.target_col].mean() - 2 * (
+                    (df[self.target_col].mean() * (
+                            1 - df.loc[:self.baseline_period][self.target_col].mean())) /
+                    df.loc[:self.baseline_period]['n']) ** 0.5
 
             # Check lcl doesn't fall below 0.
-            data_in['lcl'] = [x if x > 0 else 0 for x in data_in['lcl']]
+            df['lcl'] = [x if x > 0 else 0 for x in df['lcl']]
 
-            return data_in, None
+            return df, None
 
         elif self.chart_type == 'np-chart':
 
-            data_in = data.copy()
+            df = data.copy()
 
-            p = data_in[self.target_col].loc[:pd.to_datetime(self.baseline_date)].sum() \
-                / data_in.loc[:pd.to_datetime(self.baseline_date)]['n'].sum()
+            p = df[self.target_col].loc[:self.baseline_period].sum() \
+                / df.loc[:self.baseline_period]['n'].sum()
 
-            data_in['cl'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean()
+            df['cl'] = df.loc[:self.baseline_period][self.target_col].mean()
 
-            data_in['ucl'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() \
-                             + 3 * (data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() * (
+            df['ucl'] = df.loc[:self.baseline_period][self.target_col].mean() \
+                        + 3 * (df.loc[:self.baseline_period][self.target_col].mean() * (
                     1 - p)) ** 0.5
 
-            data_in['lcl'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() \
-                             - 3 * (data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() * (
+            df['lcl'] = df.loc[:self.baseline_period][self.target_col].mean() \
+                        - 3 * (df.loc[:self.baseline_period][self.target_col].mean() * (
                     1 - p)) ** 0.5
 
-            data_in['+1sd'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() \
-                              + 1 * (data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() * (
+            df['+1sd'] = df.loc[:self.baseline_period][self.target_col].mean() \
+                         + 1 * (df.loc[:self.baseline_period][self.target_col].mean() * (
                     1 - p)) ** 0.5
-            data_in['-1sd'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() \
-                              - 1 * (data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() * (
+            df['-1sd'] = df.loc[:self.baseline_period][self.target_col].mean() \
+                         - 1 * (df.loc[:self.baseline_period][self.target_col].mean() * (
                     1 - p)) ** 0.5
 
-            data_in['+2sd'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() \
-                              + 2 * (data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() * (
+            df['+2sd'] = df.loc[:self.baseline_period][self.target_col].mean() \
+                         + 2 * (df.loc[:self.baseline_period][self.target_col].mean() * (
                     1 - p)) ** 0.5
-            data_in['-2sd'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() \
-                              - 2 * (data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() * (
+            df['-2sd'] = df.loc[:self.baseline_period][self.target_col].mean() \
+                         - 2 * (df.loc[:self.baseline_period][self.target_col].mean() * (
                     1 - p)) ** 0.5
 
             # Check lcl doesn't fall below 0.
-            data_in['lcl'] = [x if x > 0 else 0 for x in data_in['lcl']]
+            df['lcl'] = [x if x > 0 else 0 for x in df['lcl']]
 
-            return data_in, None
+            return df, None
 
         elif self.chart_type == 'u-chart':
 
-            data_in = data.copy()
+            df = data.copy()
 
-            data_in[self.target_col] = data_in[self.target_col] / data_in['n']
+            df[self.target_col] = df[self.target_col] / df['n']
 
-            data_in['cl'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean()
-            data_in['lcl'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() - 3 * \
-                             (((data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean())) /
-                              (data_in.loc[:pd.to_datetime(self.baseline_date)]['n'])) ** 0.5
-            data_in['ucl'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() + 3 * \
-                             (((data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean())) /
-                              (data_in.loc[:pd.to_datetime(self.baseline_date)]['n'])) ** 0.5
+            df['cl'] = df.loc[:self.baseline_period][self.target_col].mean()
+            df['lcl'] = df.loc[:self.baseline_period][self.target_col].mean() - 3 * \
+                        (((df.loc[:self.baseline_period][self.target_col].mean())) /
+                         (df.loc[:self.baseline_period]['n'])) ** 0.5
+            df['ucl'] = df.loc[:self.baseline_period][self.target_col].mean() + 3 * \
+                        (((df.loc[:self.baseline_period][self.target_col].mean())) /
+                         (df.loc[:self.baseline_period]['n'])) ** 0.5
 
-            data_in['+1sd'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() + 1 * \
-                              (((data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean())) /
-                               (data_in.loc[:pd.to_datetime(self.baseline_date)]['n'])) ** 0.5
+            df['+1sd'] = df.loc[:self.baseline_period][self.target_col].mean() + 1 * \
+                         (((df.loc[:self.baseline_period][self.target_col].mean())) /
+                          (df.loc[:self.baseline_period]['n'])) ** 0.5
 
-            data_in['-1sd'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() - 1 * \
-                              (((data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean())) /
-                               (data_in.loc[:pd.to_datetime(self.baseline_date)]['n'])) ** 0.5
+            df['-1sd'] = df.loc[:self.baseline_period][self.target_col].mean() - 1 * \
+                         (((df.loc[:self.baseline_period][self.target_col].mean())) /
+                          (df.loc[:self.baseline_period]['n'])) ** 0.5
 
-            data_in['+2sd'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() + 2 * \
-                              (((data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean())) /
-                               (data_in.loc[:pd.to_datetime(self.baseline_date)]['n'])) ** 0.5
+            df['+2sd'] = df.loc[:self.baseline_period][self.target_col].mean() + 2 * \
+                         (((df.loc[:self.baseline_period][self.target_col].mean())) /
+                          (df.loc[:self.baseline_period]['n'])) ** 0.5
 
-            data_in['-2sd'] = data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean() - 2 * \
-                              (((data_in.loc[:pd.to_datetime(self.baseline_date)][self.target_col].mean())) /
-                               (data_in.loc[:pd.to_datetime(self.baseline_date)]['n'])) ** 0.5
+            df['-2sd'] = df.loc[:self.baseline_period][self.target_col].mean() - 2 * \
+                         (((df.loc[:self.baseline_period][self.target_col].mean())) /
+                          (df.loc[:self.baseline_period]['n'])) ** 0.5
 
             # Check lcl doesn't fall below 0.
-            data_in['lcl'] = [x if x > 0 else 0 for x in data_in['lcl']]
+            df['lcl'] = [x if x > 0 else 0 for x in df['lcl']]
 
-            return data_in, None
+            return df, None
 
         else:
             print('Chart type must be one of "XmR-chart", "Individual-chart", "p-chart",  '
@@ -616,7 +630,10 @@ class SPC:
         df_x = self.__identify_rule_violations_x()
         df_y = self.__identify_rule_violations_y() if self._dict_rules_y is not None else None
 
-        self.spc_data = pd.concat([df_x.reset_index(), df_y])
+        output_data = pd.concat([df_x, df_y])
+        output_data.rename(columns={self.target_col: 'target'}, inplace=True)
+
+        self.spc_data = output_data
 
     def _rules_func(self, input_df, target_col):
         """
@@ -707,142 +724,6 @@ class SPC:
         return df_y
 
 
-
-    def plot_spc(self, title='SPC Chart'):
-
-        """
-
-        Requires setup() & check_rules() methods to be called first.
-
-        Returns Plotly interactive plots for chosen SPC chart.
-
-        """
-
-        changepoint = self.baseline_date
-
-        # This will create charts for SPC with only one chart.
-        if self._formatted_data_y is None:
-
-            data = self._formatted_data_x
-
-            rules_dict_first = self._dict_rules_x
-            rules_list_first = self._rules_list_x
-
-            fig = px.line(x=data.index,
-                          y=data[self.target_col],
-                          markers=False)
-
-            fig.add_scatter(x=data.index, y=data['cl'], line_width=3, opacity=0.5, line_dash='dash', line_color='green',
-                            name='CENTRAL LINE')
-            fig.add_scatter(x=data.index, y=data['lcl'], line_width=2, opacity=0.5, line_dash='dash', line_color='red',
-                            name='LOWER CONTROL LINE')
-            fig.add_scatter(x=data.index, y=data['ucl'], line_width=2, opacity=0.5, line_dash='dash', line_color='red',
-                            name='UPPER CONTROL LINE')
-
-            for idx, rule in enumerate(rules_list_first):
-                fig.add_trace(
-                    go.Scatter(name=rule, x=rules_dict_first[rule], y=data.loc[rules_dict_first[rule]][self.target_col],
-                               mode='markers',
-                               marker=dict(symbol='circle-open', opacity=1,
-                                           size=12,
-                                           line=dict(width=3))))
-
-            fig['layout']['xaxis']['title'] = ''
-            fig['layout']['yaxis']['title'] = 'Process'
-            fig.update_layout(title=title)
-
-            fig['layout']['yaxis'].update(autorange=True)
-            fig['layout']['xaxis'].update(autorange=True)
-
-            # Don't show all legend labels
-            fig.update_traces(showlegend=False, selector=dict(name='CENTRAL LINE'))
-            fig.update_traces(showlegend=False, selector=dict(name='LOWER CONTROL LINE'))
-            fig.update_traces(showlegend=False, selector=dict(name='UPPER CONTROL LINE'))
-
-            fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="left"))
-
-            return fig
-
-        else:
-
-            data = self._formatted_data_x
-            data_var = self._formatted_data_y
-
-            rules_dict_first = self._dict_rules_x
-            rules_list_first = self._rules_list_x
-
-            rules_dict_second = self._dict_rules_y
-            rules_list_second = self._rules_list_y
-
-            if self.chart_type == 'XbarS-chart':
-                moving_range = "mS"
-            else:
-                moving_range = "mR"
-
-            fig = make_subplots(rows=2, cols=1, row_heights=[0.7, 0.3], shared_xaxes=True, vertical_spacing=0.01)
-
-            fig.add_trace(go.Scatter(x=data.index,
-                                     y=data[self.target_col], line=dict(color="blue"), name='Value'), row=1, col=1)
-
-            fig.add_scatter(x=data.index, y=data['cl'], line_width=3, opacity=0.5, line_dash='dash', line_color='green',
-                            name='CENTRAL LINE', row=1, col=1)
-            fig.add_scatter(x=data.index, y=data['lcl'], line_width=2, opacity=0.5, line_dash='dash', line_color='red',
-                            name='LOWER CONTROL LINE', row=1, col=1)
-            fig.add_scatter(x=data.index, y=data['ucl'], line_width=2, opacity=0.5, line_dash='dash', line_color='red',
-                            name='UPPER CONTROL LINE', row=1, col=1)
-
-            for idx, rule in enumerate(rules_list_first):
-                fig.add_trace(
-                    go.Scatter(name=rule, x=rules_dict_first[rule], y=data.loc[rules_dict_first[rule]][self.target_col],
-                               mode='markers',
-                               marker=dict(symbol='circle-open', opacity=1,
-                                           size=12,
-                                           line=dict(width=4))), row=1, col=1)
-
-            fig.add_trace(go.Scatter(x=data_var.index,
-                                     y=data_var['r'], line=dict(color="grey"), name='Moving Range'),
-                          row=2, col=1)
-
-            fig.add_scatter(x=data_var.index, y=data_var['cl'], line_width=3, opacity=0.5, line_dash='dash',
-                            line_color='green',
-                            name='CENTRAL LINE', row=2, col=1)
-            fig.add_scatter(x=data_var.index, y=data_var['lcl'], line_width=2, opacity=0.5, line_dash='dash',
-                            line_color='red',
-                            name='LOWER CONTROL LINE', row=2, col=1)
-            fig.add_scatter(x=data_var.index, y=data_var['ucl'], line_width=2, opacity=0.5, line_dash='dash',
-                            line_color='red',
-                            name='UPPER CONTROL LINE', row=2, col=1)
-
-            for idx, rule in enumerate(rules_list_second):
-                fig.add_trace(go.Scatter(name=rule + f' ({moving_range})', x=rules_dict_second[rule],
-                                         y=data_var.loc[rules_dict_second[rule]]['r'],
-                                         mode='markers',
-                                         marker=dict(symbol='circle-open', opacity=1,
-                                                     size=12,
-                                                     line=dict(width=4))), row=2, col=1)
-
-            fig.update_layout(title=title)
-
-            fig['layout']['yaxis'].update(autorange=True)
-            fig['layout']['xaxis'].update(autorange=True)
-
-            fig.update_yaxes(title_text="Process", row=1, col=1)
-            fig.update_xaxes(title_text="", row=2, col=1)
-            fig.update_yaxes(title_text=moving_range, row=2, col=1)
-
-            # Don't show all legend labels
-            fig.update_traces(showlegend=False, selector=dict(name='CENTRAL LINE'), row=2, col=1)
-            fig.update_traces(showlegend=False, selector=dict(name='LOWER CONTROL LINE'), row=2, col=1)
-            fig.update_traces(showlegend=False, selector=dict(name='UPPER CONTROL LINE'), row=2, col=1)
-
-            fig.update_traces(showlegend=False, selector=dict(name='CENTRAL LINE'), row=1, col=1)
-            fig.update_traces(showlegend=False, selector=dict(name='LOWER CONTROL LINE'), row=1, col=1)
-            fig.update_traces(showlegend=False, selector=dict(name='UPPER CONTROL LINE'), row=1, col=1)
-
-            fig.update_traces(showlegend=False, selector=dict(name='Value'), row=1, col=1)
-            fig.update_traces(showlegend=False, selector=dict(name='Moving Range'), row=2, col=1)
-
-            fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="left"))
-
-            return fig
-
+        output_data = pd.concat([self._data_x, self._data_y])
+        output_data.rename(columns={self.target_col: 'target'}, inplace=True)
+        self.spc_data = output_data
