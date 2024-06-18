@@ -654,6 +654,7 @@ class SPC:
         violations['Rule 3 violation'] = rule3
 
         # Rule 4: 2 out of 3 successive points beyond +/- 2 sigma limits
+        # TODO: Can this be manipulated to go through the function?
         rule4 = []
         for i in range(2, len(input_df)):
             subset = input_df.iloc[i - 2:i + 1]
