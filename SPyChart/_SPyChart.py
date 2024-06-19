@@ -118,21 +118,6 @@ class SPC:
         base_dir = os.path.dirname(__file__)
         self.rules = json.load(open(os.path.join(base_dir, "rules.json")))
 
-
-        # https://www.england.nhs.uk/improvement-hub/wp-content/uploads/sites/44/2017/11/A-gu
-        # ide-to-creating-and-interpreting-run-and-control-charts.pdf
-        rules_df = pd.DataFrame()
-        rules_df['Rules'] = ['Rule 1', 'Rule 2', 'Rule 3', 'Rule 4', 'Rule 5']
-        rules_df['Rule definition'] = ['1 point outside the +/- 3 sigma limits',
-                                       '8 successive consecutive points above (or below) the centre line',
-                                       '6 or more consecutive points steadily increasing or decreasing',
-                                       '2 out of 3 successive points beyond +/- 2 sigma limits',
-                                       '15 consecutive points within +/- 1 sigma on either side of the centre line']
-        rules_df = rules_df.set_index('Rules')
-
-        # Save rules attribute as dataframe.
-        self.rules_table = rules_df
-
         # ------------------------------------------------------
         # -** Checking data/alerting user of potential issues.**-
         # ------------------------------------------------------
