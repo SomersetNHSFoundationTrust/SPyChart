@@ -1,0 +1,76 @@
+{
+    "Individual-chart": {
+        "chart_name_x": "X-chart",
+        "rules": [
+            "Rule 1 violation",
+            "Rule 2 violation",
+            "Rule 3 violation",
+            "Rule 4 violation",
+            "Rule 5 violation"
+        ]
+    },
+    "XbarR-chart": {
+        "chart_name_x": "Xbar-chart",
+        "chart_name_y": "mR-chart",
+        "rules": [
+            "Rule 1 violation",
+            "Rule 2 violation",
+            "Rule 3 violation",
+            "Rule 4 violation",
+            "Rule 5 violation"
+        ]
+    },
+    "XbarS-chart": {
+        "chart_name_x": "Xbar-chart",
+        "rules": [
+            "Rule 1 violation",
+            "Rule 2 violation",
+            "Rule 3 violation",
+            "Rule 4 violation",
+            "Rule 5 violation"
+        ]
+    },
+    "XmR-chart": {
+        "chart_name_x": "X-chart",
+        "chart_name_y": "mR-chart",
+        "rules": [
+            "Rule 1 violation",
+            "Rule 2 violation",
+            "Rule 3 violation",
+            "Rule 4 violation",
+            "Rule 5 violation"
+        ]
+    },
+    "c-chart": {
+        "chart_name_x": "c-chart",
+        "rules": [
+            "Rule 1 violation",
+            "Rule 2 violation",
+            "Rule 3 violation"
+        ]
+    },
+    "np-chart": {
+        "chart_name_x": "np-chart",
+        "rules": [
+            "Rule 1 violation",
+            "Rule 2 violation",
+            "Rule 3 violation"
+        ]
+    },
+    "p-chart": {
+        "chart_name_x": "p-chart",
+        "rules": [
+            "Rule 1 violation",
+            "Rule 2 violation",
+            "Rule 3 violation"
+        ]
+    },
+    "u-chart": {
+        "chart_name_x": "u-chart",
+        "rules": [
+            "Rule 1 violation",
+            "Rule 2 violation",
+            "Rule 3 violation"
+        ]
+    }
+}

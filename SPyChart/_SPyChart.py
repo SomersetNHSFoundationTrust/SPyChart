@@ -18,7 +18,9 @@
 
 import pandas as pd
 import numpy as np
-
+import json
+import os
+from numpy.lib.stride_tricks import sliding_window_view
 '''
 
 ------------------
@@ -110,7 +112,11 @@ class SPC:
         self._chart_name_x = None
         self._chart_name_y = None
         # Assuming index is date
+
         self._date_col = df.index.name
+
+        base_dir = os.path.dirname(__file__)
+        self.rules = json.load(open(os.path.join(base_dir, "rules.json")))
 
         # ------------------------------------------------------
         # -** Checking data/alerting user of potential issues.**-
@@ -131,90 +137,9 @@ class SPC:
                 print('Less than 20 data points detected in baseline period. Consider adding more \
                 data pre-baseline.')
 
-    # -------------------------
-    # -** UTILITY FUNCTIONS **-
-    # -------------------------
+        self.setup()
+        self.check_rules()
 
-    def _rules_func(input_df, target_col):
-
-        """
-
-        Checks up to 5 SPC rules. Not all rules are suitable for all charts, therefore, fewer rules will
-        be tested in these instances.
-
-        !! Can add rules as requested.
-
-        Args:
-            input_df (pandas.DataFrame): Data to analyse.
-            target_col (str): Name of target column.
-
-        Returns:
-            dict: Dictionary of rule violations with Rule 1-5 as keys, and dates as values.
-
-        """
-
-        violations = {}
-
-        # Rule 1: Point outside the +/- 3 sigma limits
-        rule1 = (input_df[target_col] > input_df['ucl']) | (input_df[target_col] < input_df['lcl'])
-        violations['Rule 1 violation'] = input_df.index[rule1].tolist()
-
-        # Rule 2: 8 successive consecutive points above (or below) the centre line
-        rule2 = []
-        for i in range(7, len(input_df)):
-            subset = input_df.iloc[i - 7:i + 1]
-            if (subset[target_col] > subset['cl']).all() or (subset[target_col] < subset['cl']).all():
-                rule2.append(input_df.index[i])
-        violations['Rule 2 violation'] = rule2
-
-        # Rule 3: 6 or more consecutive points steadily increasing or decreasing
-        rule3 = []
-        for i in range(5, len(input_df)):
-            subset = input_df.iloc[i - 5:i + 1]
-            if np.all(np.diff(subset[target_col]) > 0) or np.all(np.diff(subset[target_col]) < 0):
-                rule3.append(input_df.index[i])
-        violations['Rule 3 violation'] = rule3
-
-        # Rule 4: 2 out of 3 successive points beyond +/- 2 sigma limits
-        rule4 = []
-        for i in range(2, len(input_df)):
-            subset = input_df.iloc[i - 2:i + 1]
-            if ((subset[target_col] > subset['+2sd']).sum() >= 2) or ((subset[target_col] < subset['-2sd']).sum() >= 2):
-                rule4.append(input_df.index[i])
-        violations['Rule 4 violation'] = rule4
-
-        # Rule 5: 15 consecutive points within +/- 1 sigma on either side of the centre line
-        rule5 = []
-        for i in range(14, len(input_df)):
-            subset = input_df.iloc[i - 14:i + 1]
-            if np.all(np.abs(subset[target_col] - subset['cl']) <= subset['+1sd'] - subset['cl']):
-                rule5.append(input_df.index[i])
-        violations['Rule 5 violation'] = rule5
-
-        return violations
-
-    def _clean_time_series_data(self, data):
-
-        """
-        Checks data for any data quality issues.
-        
-        Inputs:
-            data (pandas.DataFrame): Data to analyse (with datetime index).
-        """
-
-        # Check if index is in pandas datetime format
-        if pd.api.types.is_datetime64_any_dtype(data.index):
-            try:
-                data.index = pd.to_datetime(data.index)
-            except ValueError:
-                raise ValueError(f"Index not in required format. Please use datetime index.")
-
-        # Check for missing data
-        missing_values = data.isnull().sum()
-
-        if missing_values.any():
-            print("Missing values detected:")
-            print(missing_values)
 
     # -----------------------
     # -** MAIN CLASS CODE **-
@@ -233,7 +158,6 @@ class SPC:
         return self.spc_data
 
     def setup(self):
-
         """
 
         Function enabling multiple runs of the _setup_single_run() method. This is to allow
@@ -243,25 +167,45 @@ class SPC:
 
 
         """
-
         # Firstly, we check for any DQ issues using _clean_time_series_data().
-        self._clean_time_series_data(self.df)
+        self._clean_time_series_data()
+        self.__format_data()
 
+    def _clean_time_series_data(self):
+
+        """
+        Checks data for any data quality issues.
+
+        Inputs:
+            data (pandas.DataFrame): Data to analyse (with datetime index).
+        """
+
+        # Check if index is in pandas datetime format
+        if pd.api.types.is_datetime64_any_dtype(self.df.index):
+            try:
+                self.df.index = pd.to_datetime(self.df.index)
+            except ValueError:
+                raise ValueError(f"Index not in required format. Please use datetime index.")
+
+        # Check for missing data
+        missing_values = self.df.isnull().sum()
+
+        if missing_values.any():
+            print("Missing values detected:")
+            print(missing_values)
+
+    def __format_data(self):
+        # TODO: Docstring
         # Check input arguments to determine number of runs of the _setup_single_run() method.
         if self.change_dates is None:
+            self._formatted_data_x, self._formatted_data_y = self._setup_single_run(data=self.df)
 
-            formatted_x_out, formatted_y_out = self._setup_single_run(data=self.df)
-            self._formatted_data_x = formatted_x_out
-            self._formatted_data_y = formatted_y_out
         else:
             list_dates = [self.df.index[0]] + self.change_dates + [self.df.index[-1]]
-            list_dataframes = []
-            for idx in range(0, len(list_dates) - 1):
-                if idx == len(list_dates) - 2:
-                    list_dataframes.append(self.df.loc[list_dates[idx]:(pd.to_datetime(list_dates[idx + 1]))])
-                else:
-                    list_dataframes.append(self.df.loc[list_dates[idx]:(pd.to_datetime(list_dates[idx + 1]) - \
-                                                                        pd.DateOffset(days=1))])
+            list_dataframes = [
+                                  self.df.loc[list_dates[idx]: (pd.to_datetime(list_dates[idx + 1]) - pd.DateOffset(days=1))]
+                                  for idx in range(0, len(list_dates) -2)
+                              ] + [self.df.loc[list_dates[-2]:(pd.to_datetime(list_dates[-1]))]]
 
             formatted_x = []
             formatted_y = []
@@ -269,11 +213,11 @@ class SPC:
                 formatted_x_out, formatted_y_out = self._setup_single_run(data=data)
                 formatted_x.append(formatted_x_out)
                 formatted_y.append(formatted_y_out)
+
             self._formatted_data_x = pd.concat(formatted_x)
-            if all(x is None for x in formatted_y):
-                self._formatted_data_y = None
-            else:
-                self._formatted_data_y = pd.concat(formatted_y)
+            self._formatted_data_y = None if all(x is None for x in formatted_y) else pd.concat(formatted_y)
+
+
 
     def _setup_single_run(self, data):
 
@@ -649,7 +593,6 @@ class SPC:
                   '"np-chart", "c-chart", "u-chart", "XbarR-chart", XbarS-chart"')
 
     def check_rules(self):
-
         """
 
         Requires setup() method to be called first.
@@ -657,77 +600,115 @@ class SPC:
         Checks the calculated control lines, and tests up to 8 rules.
 
         """
-
-        if self.chart_type in ("XmR-chart", "XbarR-chart", "XbarS-chart"):
-            self._target_col_x = self.target_col
-            self._target_col_y = 'r'
-        else:
-            self._target_col_x = self.target_col
-            self._target_col_y = None
+        self._target_col_x = self.target_col
+        self._target_col_y = 'r' if self.chart_type in ("XmR-chart", "XbarR-chart", "XbarS-chart") else None
 
         # Check rules for both graphs (checking second graph data is not None)
-        self._dict_rules_x = SPC._rules_func(self._formatted_data_x, self._target_col_x)
-        if self._formatted_data_y is None:
-            self._dict_rules_y = None
-        else:
-            self._dict_rules_y = SPC._rules_func(self._formatted_data_y, self._target_col_y)
+        self._dict_rules_x = self._rules_func(self._formatted_data_x, self._target_col_x)
+        self._dict_rules_y = None if self._formatted_data_y is None else self._rules_func(self._formatted_data_y, self._target_col_y)
 
-        # Defining rules applicable to each SPC chart type.
-        if self.chart_type in ('XmR-chart', 'Individual-chart', 'XbarR-chart', 'XbarS-chart'):
-            self._rules_list_x = ['Rule 1 violation', 'Rule 2 violation', 'Rule 3 violation', 'Rule 4 violation',
-                                  'Rule 5 violation']
-        elif self.chart_type in ('np-chart', 'p-chart', 'u-chart', 'c-chart'):
-            self._rules_list_x = ['Rule 1 violation', 'Rule 2 violation', 'Rule 3 violation']
+        rules = self.rules[self.chart_type]
+        self._rules_list_x = rules["rules"]
+        self._chart_name_x = rules.get("chart_name_x")
+        self._chart_name_y = rules.get("chart_name_y")
 
-        if self._dict_rules_y is not None:
-            self._rules_list_y = ['Rule 1 violation', 'Rule 2 violation', 'Rule 3 violation']
-        else:
-            self._rules_list_y = None
+        df_x = self.__identify_rule_violations_x()
+        df_y = self.__identify_rule_violations_y() if self._dict_rules_y is not None else None
 
-        # Format output data, with rule violations and control lines
+        output_data = pd.concat([df_x, df_y])
+        output_data.rename(columns={self.target_col: 'target'}, inplace=True)
 
-        # Formatting chart type names
-        if self.chart_type in ('XmR-chart', 'Individual-chart'):
-            self._chart_name_x = 'X-chart'
-        if self.chart_type in ('XmR-chart', 'XbarR-chart'):
-            self._chart_name_y = 'mR-chart'
-        if self.chart_type in ('XbarS-chart', 'XbarR-chart'):
-            self._chart_name_x = 'Xbar-chart'
-        if self.chart_type in ('np-chart', 'p-chart', 'u-chart', 'c-chart'):
-            self._chart_name_x = self.chart_type
+        self.spc_data = output_data
 
-        dictionary_x_first = self._dict_rules_x
-        dictionary_x = {key: value for key, value in dictionary_x_first.items() if key in self._rules_list_x}
+    def _rules_func(self, input_df, target_col):
+        """
+        Checks up to 5 SPC rules. Not all rules are suitable for all charts, therefore, fewer rules will
+        be tested in these instances.
+
+        !! Can add rules as requested.
+
+        Args:
+            input_df (pandas.DataFrame): Data to analyse.
+            target_col (str): Name of target column.
+
+        Returns:
+            dict: Dictionary of rule violations with Rule 1-5 as keys, and dates as values.
+
+        """
+        violations = {}
+
+        # Rule 1: Point outside the +/- 3 sigma limits
+        rule1 = (input_df[target_col] > input_df['ucl']) | (input_df[target_col] < input_df['lcl'])
+        violations['Rule 1 violation'] = input_df.index[rule1].tolist()
+
+        # Rule 2: 8 successive consecutive points above (or below) the centre line
+        rule2 = self.__calculate_rule_violations(
+            input_df[target_col] > input_df['cl'], input_df[target_col] < input_df['cl'],
+            input_df=input_df, window_size=8
+        )
+        violations['Rule 2 violation'] = rule2
+
+        # Rule 3: 6 or more consecutive points steadily increasing or decreasing
+        rule3 = self.__calculate_rule_violations(
+            np.diff(input_df[target_col]) > 0, np.diff(input_df[target_col]) < 0,
+            input_df=input_df, window_size=6, buffer=1,
+        )
+        violations['Rule 3 violation'] = rule3
+
+        # Rule 4: 2 out of 3 successive points beyond +/- 2 sigma limits
+        # TODO: Can this be manipulated to go through the function?
+        rule4 = []
+        for i in range(2, len(input_df)):
+            subset = input_df.iloc[i - 2:i + 1]
+            if ((subset[target_col] > subset['+2sd']).sum() >= 2) or ((subset[target_col] < subset['-2sd']).sum() >= 2):
+                rule4.append(input_df.index[i])
+        violations['Rule 4 violation'] = rule4
+
+        # Rule 5: 15 consecutive points within +/- 1 sigma on either side of the centre line
+        rule5 = self.__calculate_rule_violations(
+            np.abs(input_df[target_col] - input_df['cl']) <= (input_df['+1sd'] - input_df['cl']),
+            input_df=input_df, window_size=15
+        )
+        violations['Rule 5 violation'] = rule5
+
+        return violations
+
+    def __calculate_rule_violations(self, *args, input_df, window_size, buffer=0):
+        # TODO: docstring
+
+        mask = [False] * (window_size-1+buffer) + \
+        np.array([sliding_window_view(arg, window_shape=window_size).all(axis=1) for arg in args]).any(axis=0).tolist()
+
+        return input_df.index[mask]
+
+
+    def __identify_rule_violations_x(self):
+        dictionary_x = {key: value for key, value in self._dict_rules_x.items() if key in self._rules_list_x}
         df_x = self._formatted_data_x
-
-        if self._dict_rules_y is not None:
-            dictionary_y_first = self._dict_rules_y
-            dictionary_y = {key: value for key, value in dictionary_y_first.items() if key in self._rules_list_y}
-            df_y = self._formatted_data_y
-        else:
-            df_y = None
-
-            # Function to check if a date exists in the dictionary list
-
-        def check_date(date, date_list):
-            return 1 if date in date_list else 0
-
         # Add columns with string headers and binary representation
         for header, date_list in dictionary_x.items():
-            df_x[header] = df_x.reset_index()[self._date_col].apply(lambda x: check_date(x, date_list)).values
+            df_x[header] = df_x.reset_index()[self._date_col].apply(lambda x: 1 if x in date_list else 0).values
+
         df_x['chart type'] = self._chart_name_x
-        self._data_x = df_x.reset_index()
 
-        if df_y is None:
-            self._data_y = None
-        else:
-            for header, date_list in dictionary_y.items():
-                df_y[header] = df_y.reset_index()[self._date_col].apply(lambda x: check_date(x, date_list)).values
-            df_y['chart type'] = self._chart_name_y
+        return df_x
 
-            self._data_y = df_y.reset_index()
+    def __identify_rule_violations_y(self):
+        rules = ['Rule 1 violation', 'Rule 2 violation', 'Rule 3 violation']
+        dictionary_y = {key: value for key, value in self._dict_rules_y.items() if key in rules}
+
+        df_y = self._formatted_data_y
+
+        for header, date_list in dictionary_y.items():
+            df_y[header] = df_y.reset_index()[self._date_col].apply(lambda x: 1 if x in date_list else 0).values
+
+        df_y['chart type'] = self._chart_name_y
+
+        df_y.reset_index(inplace=True)
+
+        return df_y
+
 
         output_data = pd.concat([self._data_x, self._data_y])
         output_data.rename(columns={self.target_col: 'target'}, inplace=True)
-
         self.spc_data = output_data
